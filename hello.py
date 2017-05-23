@@ -1,6 +1,7 @@
-from flask import Flask,request
+from flask import Flask,request, current_app,make_response
 from flaskext.mysql import MySQL
 from datetime import date,timedelta
+from functools import update_wrapper
 import datetime
 import json
 
@@ -22,9 +23,61 @@ def weekBoundaries(year,week):
     sat = sun + timedelta(days=6)
     return sun, sat
 
+def crossdomain(origin=None, methods=None, headers=None, max_age=21600,
+                attach_to_all=True, automatic_options=True):
+    """Decorator function that allows crossdomain requests.
+      Courtesy of
+      https://blog.skyred.fi/articles/better-crossdomain-snippet-for-flask.html
+    """
+    if methods is not None:
+        methods = ', '.join(sorted(x.upper() for x in methods))
+    if headers is not None and not isinstance(headers, list):
+        headers = ', '.join(x.upper() for x in headers)
+    if not isinstance(origin, list):
+        origin = ', '.join(origin)
+    if isinstance(max_age, timedelta):
+        max_age = max_age.total_seconds()
+
+    def get_methods():
+        """ Determines which methods are allowed
+        """
+        if methods is not None:
+            return methods
+
+        options_resp = current_app.make_default_options_response()
+        return options_resp.headers['allow']
+
+    def decorator(f):
+        """The decorator function
+        """
+        def wrapped_function(*args, **kwargs):
+            """Caries out the actual cross domain code
+            """
+            if automatic_options and request.method == 'OPTIONS':
+                resp = current_app.make_default_options_response()
+            else:
+                resp = make_response(f(*args, **kwargs))
+            if not attach_to_all and request.method != 'OPTIONS':
+                return resp
+
+            h = resp.headers
+            h['Access-Control-Allow-Origin'] = origin
+            h['Access-Control-Allow-Methods'] = get_methods()
+            h['Access-Control-Max-Age'] = str(max_age)
+            h['Access-Control-Allow-Credentials'] = 'true'
+            h['Access-Control-Allow-Headers'] = \
+                "Origin, X-Requested-With, Content-Type, Accept, Authorization"
+            if headers is not None:
+                h['Access-Control-Allow-Headers'] = headers
+            return resp
+
+        f.provide_automatic_options = False
+        return update_wrapper(wrapped_function, f)
+    return decorator
 
 
 @app.route('/record/<int:user_id>')
+@crossdomain(origin='*')
 def home(user_id):
 
     user_id = str(user_id)
@@ -52,9 +105,10 @@ def home(user_id):
 
     cursor = mysql.connect().cursor()
     # get today count
-    today_args = (user_id,today)
+    today_args = (user_id,str(today))
     today_sql = "SELECT count(*) as count FROM mainlog where user_id=%s" \
                 + " AND logdate= %s AND deleted='0';"
+
     cursor.execute(today_sql,today_args)
     today_count = cursor.fetchone()
     # get week count
@@ -68,7 +122,7 @@ def home(user_id):
     month_args = (user_id,cur_date_first,cur_date_last)
     month_sql = "SELECT count(*) as count FROM mainlog where user_id=%s" \
                + " AND logdate between %s " \
-               + " AND %s; AND deleted='0'"
+               + " AND %s AND deleted='0';"
     cursor.execute(month_sql,month_args)
     month_count = cursor.fetchone()
 
@@ -86,6 +140,7 @@ def home(user_id):
     return json_str
 
 @app.route('/record/add',methods=['GET','POST'])
+@crossdomain(origin='*')
 def record_add():
     if request.method == 'POST':
         #define the result data
@@ -130,6 +185,7 @@ def record_add():
 
         cursor.close()
         mysql.connect().close()
+        result['error_message'] = 'Add Succes!'
         return json.dumps(result);
     else:
         return 'your request method should POST'
